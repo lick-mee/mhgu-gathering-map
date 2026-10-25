@@ -42,19 +42,6 @@ Each map has a set of gathering points per area (world position, kind of spot) a
 
 The quest map draws its icons through one icon object per map view. Each keeps a GUI instance of the `map_icon` layout per icon and every frame plays a sequence on it (color), converts a world position to the map and shows or hides it. The plugin hooks that object: when it initializes, the plugin makes extra instances of its own, and after each of its updates places them on the gathering points of the current map, setting the icon's texture cut directly. `tools/make_data.py` (the release's `setup.bat`) copies the item icons into free space of the map icon texture and adds one sequence per icon and color to `map_icon`, in your `quest_eng.arc`. `src/plugin.c` has the game addresses and offsets.
 
-## Build
-
-Needs [Zig](https://ziglang.org/download/) 0.17 (the C compiler and linker for the 32-bit ARM plugin) and Python 3:
-
-```sh
-python tools/make_data.py --header /path/to/recomp   # src/points.h, and the map icons for that recomp
-sh build.sh                                         # out/gather_map.nro
-sh build.sh /path/to/recomp                         # and install it into that recomp's mods folder
-sh build.sh --zip                                   # and pack the release zip into dist/
-```
-
-Set `ZIG=/path/to/zig` if Zig isn't on your `PATH`. `build/elf2nro.py` turns the linked library into an NRO, and `src/forge.h` lists the Forge API calls the plugin uses. `tools/gamedata.py` reads MT archives, the gathering point and lot files, the item table, and the `map_icon` GUI (its layout follows [Fexty12573's mhw-gui-editor](https://github.com/Fexty12573/mhw-gui-editor), which also reads MHGU's).
-
 ## Thanks
 
 [MHGU Recomp](https://github.com/morerokk/MHGURecomp), which this mod is made for, and [mhw-gui-editor](https://github.com/Fexty12573/mhw-gui-editor) for the GUI file layout.

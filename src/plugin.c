@@ -6,10 +6,9 @@
 // layout's "icn" animation (which picks the texture cut and color), places it with its map view's worldToMap and
 // shows or hides it. The plugin does the same with instances of its own: when an icon object initializes it gets
 // MAX_MAP_POINTS more instances, and after each of its updates those show the gathering points of the current map
-// in the areas the view shows. The sequences are the mod's own (FIRST_SEQUENCE...), added to map_icon by
-// tools/make_data.py (the release's setup.bat), along with the icons themselves in free space of the map icon
-// texture. Sequences give the color; the texture cut doesn't reach instances made this way, so the plugin sets it on
-// the instance's texture object itself. The points (src/points.h) come from the maps' gathering-point sets.
+// in the areas the view shows. Each plays the game's dropped-item sequence; the plugin then gives the instance's
+// texture object the item icon itself (the common icon texture, the cut of the item icon, the item color), so no
+// game file changes. The points (src/points.h) come from the maps' gathering-point sets (tools/make_data.py).
 //
 // cUIOQuestMapIcon: +0x24 its GUI, +0xCC the map view (cUIOMapBase: +0x94 map number; vtable +0x64 shows an area,
 // +0x6C world position -> map position), +0xD0/+0xD4 what new icon instances are made from and attached to.
@@ -20,6 +19,7 @@
 #endif
 
 typedef struct { u8 map, area, kind, color; float pos[3]; } GatherPoint;
+typedef struct { u32 texture; float cut[4]; } IconCut;
 #include "points.h"
 
 #define ICON_INIT 0x61912C   // cUIOQuestMapIcon: makes its icon instances
@@ -31,7 +31,9 @@ typedef struct { u8 map, area, kind, color; float pos[3]; } GatherPoint;
 #define GUI_SET_X 0x545A40
 #define GUI_SET_Y 0x545AC0
 #define GUI_SET_PRIORITY 0x546E84
-#define TEXOBJ_SET_RECT 0xA4FB58 // cGUIObjTexture: mTextureRect (+0x10C)
+#define TEXOBJ_SET_TEXTURE 0xA4FAF0 // cGUIObjTexture: Texture, by the layout's texture id (+0x100)
+#define TEXOBJ_SET_RECT 0xA4FB58    // cGUIObjTexture: mTextureRect (+0x10C)
+#define TEXOBJ_SET_COLOR 0xA4E074   // cGUIObj2D: VertexColor, RGBA (+0xA4)
 #define GUI_SET_SCALE 0x545FAC // both axes; the game draws big monsters at 1.5
 #define UIO_SET_SEQUENCE 0x56E538
 #define UIO_SET_LAYER 0x56E6A8
@@ -48,7 +50,7 @@ typedef struct { u8 map, area, kind, color; float pos[3]; } GatherPoint;
 #define VIEW_WORLD_TO_MAP (0x6C / 4)
 
 #define ANIM_ICN 4
-#define KIND_OTHER 0 // crates, barrels, ammo...: the game's dropped-item marker
+#define SEQ_DROPPED_ITEM 1000023 // em_otosimono
 #define PRIORITY 50 // below the game's icons (traps 100, monsters 700+, hunters 900)
 
 void *memset(void *d, int c, u32 n) { u8 *p = d; while (n--) *p++ = (u8)c; return d; }
@@ -64,6 +66,8 @@ typedef void (*SetLayer)(u32 uio, u32 inst, u32 a, u32 b, u32 layer);
 typedef bool (*ShowsArea)(u32 view, u32 area);
 typedef void (*WorldToMap)(u32 view, const float *pos, float *out, u32 area);
 typedef void (*SetRect)(u32 obj, const float *rect);
+typedef void (*SetTexture)(u32 obj, u32 texture);
+typedef void (*SetColor)(u32 obj, const u32 *rgba);
 
 static ForgeHook g_init_hook, g_update_hook;
 static bool g_hooked, g_enabled = true, g_show_other = false;
@@ -102,6 +106,7 @@ static void icon_init(u32 obj) {
         u32 inst = FN(NewInstance, GUI_NEW_INSTANCE)(gui, *(u32 *)(obj + ICON_INST_SRC), ANIM_ICN,
                                                       *(u32 *)(obj + ICON_INST_PARENT), dti);
         FN(InstanceFlag, GUI_INSTANCE_FLAG)(gui, inst, 1, 3);
+        FN(SetSequence, UIO_SET_SEQUENCE)(obj, inst, SEQ_DROPPED_ITEM);
         FN(SetBool, GUI_SET_VISIBLE)(gui, inst, 0);
         g_views[i].inst[g_views[i].count++] = inst;
     }
@@ -130,13 +135,14 @@ static void icon_update(u32 obj) {
                 float pos[4] __attribute__((aligned(16))) = {p->pos[0], p->pos[1], p->pos[2], 0};
                 float at[4] __attribute__((aligned(16))) = {0};
                 u32 id = inst[used++];
-                FN(SetSequence, UIO_SET_SEQUENCE)(obj, id, FIRST_SEQUENCE + p->kind * COLOR_COUNT + p->color);
                 FN(SetLayer, UIO_SET_LAYER)(obj, id, 1, 2, 5);
                 u32 tex = icon_object(gui, id);
                 if (tex) {
-                    const float *r = g_kind_rects[p->kind];
-                    float rect[4] __attribute__((aligned(16))) = {r[0], r[1], r[2], r[3]};
-                    FN(SetRect, TEXOBJ_SET_RECT)(tex, rect);
+                    const IconCut *k = &g_kinds[p->kind];
+                    float cut[4] __attribute__((aligned(16))) = {k->cut[0], k->cut[1], k->cut[2], k->cut[3]};
+                    FN(SetTexture, TEXOBJ_SET_TEXTURE)(tex, k->texture);
+                    FN(SetRect, TEXOBJ_SET_RECT)(tex, cut);
+                    FN(SetColor, TEXOBJ_SET_COLOR)(tex, &g_colors[p->color]);
                 }
                 ((WorldToMap)vt[VIEW_WORLD_TO_MAP])(view, pos, at, p->area);
                 FN(SetFloat, GUI_SET_X)(gui, id, at[0]);

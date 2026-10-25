@@ -3,11 +3,10 @@
 #   sh build.sh                  -> out/gather_map.nro
 #   sh build.sh <recomp folder>  -> also installs it into <recomp folder>/mods/zzz-gather-map
 #   sh build.sh --zip            -> also packs dist/gather-map-v<version>.zip, the release download
-# Needs Zig (on PATH, or ZIG=/path/to/zig) and Python 3. src/points.h comes from tools/make_data.py --header; the
-# map icon archive from tools/make_data.py <recomp folder> (the release's setup.bat).
+# Needs Zig (on PATH, or ZIG=/path/to/zig) and Python 3. src/points.h comes from tools/make_data.py <recomp folder>.
 set -e
 cd "$(dirname "$0")"
-VERSION=1.0.0
+VERSION=1.1.0
 ZIG=${ZIG:-zig}
 OUT=out
 mkdir -p "$OUT"

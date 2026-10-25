@@ -1,4 +1,4 @@
-"""Pack the release zip: a zzz-gather-map folder to drop into the recomp's mods folder, with its setup."""
+"""Pack the release zip: a zzz-gather-map folder to drop into the recomp's mods folder."""
 import os
 import sys
 import zipfile
@@ -12,9 +12,6 @@ def main(nro, dst):
     with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as z:
         z.write(nro, MOD + '/romfs/nativeNX/plugins/gather_map.nro')
         z.write(os.path.join(here, '..', 'mod', 'README.txt'), MOD + '/README.txt')
-        z.write(os.path.join(here, '..', 'mod', 'setup.bat'), MOD + '/setup.bat')
-        for name in ('make_data.py', 'gamedata.py'):
-            z.write(os.path.join(here, '..', 'tools', name), MOD + '/setup/' + name)
     print('wrote %s' % dst)
 
 

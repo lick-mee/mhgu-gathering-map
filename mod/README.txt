@@ -9,6 +9,7 @@ Install
 Options
   Press Insert in game and open "Gathering Map": switch it off, change the icon size, or also show other pickups
   (crates, barrels, ammo).
+  Your choices are saved (gather_map.ini in the game's save folder) and kept at the next start.
 
 Uninstall: delete this folder.
 

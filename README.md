@@ -26,7 +26,7 @@ Press **Insert** in game and open **Gathering Map**:
 - **Also show other pickups**: off by default. Crates, barrels and arena ammo spots, with the game's `!` dropped-item marker.
 - **Icon size (%)**: 35 by default.
 
-Options reset at each start.
+Options are saved as soon as you change them (in `gather_map.ini` in the game's save folder) and come back at the next start; until you change one, the defaults above apply.
 
 ## Compatibility
 

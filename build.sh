@@ -6,7 +6,7 @@
 # Needs Zig (on PATH, or ZIG=/path/to/zig) and Python 3. src/items.h comes from tools/make_data.py <recomp folder>.
 set -e
 cd "$(dirname "$0")"
-VERSION=1.2.0
+VERSION=1.3.0
 ZIG=${ZIG:-zig}
 OUT=out
 mkdir -p "$OUT"

@@ -94,6 +94,108 @@ static u32 g_main;
 static int g_map = -1, g_shown;
 static int g_size = 35; // icon scale in percent
 
+// Settings: gather_map.ini in the game's save storage. Defaults until the first change; read once the storage
+// mounts (it can't before the game sets up its save), written on every change.
+#define SETTINGS_FILE "gather_map.ini"
+static bool g_settings_read;
+static u32 g_settings_wait; // frames until the next read attempt
+
+static u32 make_path(char *out, u32 max) {
+    const char *m = forge_fs_getSaveDataMountPoint();
+    u32 n = 0;
+    for (const char *s = m ? m : "savedata"; *s && n < max - 1; s++) out[n++] = *s;
+    for (const char *s = ":/" SETTINGS_FILE; *s && n < max - 1; s++) out[n++] = *s;
+    out[n] = 0;
+    return n;
+}
+
+int memcmp(const void *a, const void *b, u32 n) {
+    const u8 *p = a, *q = b;
+    for (; n; n--, p++, q++) if (*p != *q) return *p - *q;
+    return 0;
+}
+
+static int parse_int(const char *s, const char *end) {
+    int v = 0;
+    while (s < end && *s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
+    return v;
+}
+
+static void settings_parse(const char *s, const char *end) {
+    while (s < end) {
+        const char *eol = s, *eq = 0;
+        while (eol < end && *eol != '\n') { if (*eol == '=' && !eq) eq = eol; eol++; }
+        if (eq) {
+            u32 k = (u32)(eq - s);
+            int v = parse_int(eq + 1, eol);
+            #define KEY(name) (k == sizeof name - 1 && !memcmp(s, name, k))
+            if (KEY("enabled")) g_enabled = v != 0;
+            else if (KEY("show_other")) g_show_other = v != 0;
+            else if (KEY("icon_size") && v >= 20 && v <= 150) g_size = v;
+            #undef KEY
+        }
+        s = eol + 1;
+    }
+}
+
+// Reads the settings once; true when done (read, or there is no file yet).
+static bool settings_read(void) {
+    if (g_settings_read) return true;
+    if (g_settings_wait) { g_settings_wait--; return false; }
+    if (!forge_fs_mountSaveData()) { g_settings_wait = 120; return false; }
+    char path[64], buf[256];
+    make_path(path, sizeof path);
+    if (forge_fs_fileExists(path)) {
+        FsFile f;
+        s64 size = 0;
+        if (!nnfs_OpenFile(&f, path, FS_READ)) {
+            if (!nnfs_GetFileSize(&size, f) && size > 0) {
+                u32 n = size < (s64)sizeof buf ? (u32)size : sizeof buf;
+                if (!nnfs_ReadFile(f, 0, buf, n)) settings_parse(buf, buf + n);
+            }
+            nnfs_CloseFile(f);
+        }
+        forge_log(LOG_INFO, "gather-map: settings read from %s", path);
+    }
+    forge_fs_unmountSaveData();
+    g_settings_read = true;
+    return true;
+}
+
+static char *put_line(char *q, const char *key, int v) {
+    while (*key) *q++ = *key++;
+    *q++ = '=';
+    char digits[8];
+    int n = 0;
+    do digits[n++] = (char)('0' + v % 10); while ((v /= 10) && n < 8);
+    while (n) *q++ = digits[--n];
+    *q++ = '\n';
+    return q;
+}
+
+static void settings_write(void) {
+    if (!forge_fs_mountSaveData()) { forge_log(LOG_WARN, "gather-map: save storage unavailable, settings not saved"); return; }
+    char path[64], buf[128], *q = buf;
+    make_path(path, sizeof path);
+    q = put_line(q, "enabled", g_enabled);
+    q = put_line(q, "show_other", g_show_other);
+    q = put_line(q, "icon_size", g_size);
+    u32 n = (u32)(q - buf);
+    bool ok = false;
+    FsFile f;
+    if (forge_fs_fileExists(path) || !nnfs_CreateFile(path, 0)) {
+        if (!nnfs_OpenFile(&f, path, FS_WRITE | FS_APPEND)) {
+            FsWriteOption opt = {1};
+            ok = !nnfs_SetFileSize(f, n) && !nnfs_WriteFile(f, 0, buf, n, &opt);
+            nnfs_CloseFile(f);
+        }
+    }
+    if (ok) ok = !nnfs_CommitSaveData(forge_fs_getSaveDataMountPoint() ? forge_fs_getSaveDataMountPoint() : "savedata");
+    forge_fs_unmountSaveData();
+    g_settings_read = true; // what was chosen now wins over an older file
+    forge_log(ok ? LOG_INFO : LOG_WARN, "gather-map: settings %s", ok ? "saved" : "could not be saved");
+}
+
 #define MAX_VIEWS 4
 static struct { u32 obj, count, inst[MAX_ICONS]; } g_views[MAX_VIEWS];
 static u32 g_next_view;
@@ -148,6 +250,8 @@ static u32 view_of(u32 obj) {
 
 static void icon_init(u32 obj) {
     ((Method)g_init_hook.original)(obj);
+    g_settings_wait = 0;
+    settings_read(); // a quest is loading: the save is set up by now
     u32 i = view_of(obj);
     if (i == MAX_VIEWS) i = g_next_view++ % MAX_VIEWS; // a freed object's slot; its instances went with it
     g_views[i].obj = obj;
@@ -232,9 +336,12 @@ EXPORT void forge_onImGuiInit(void *ctx, void *alloc, void *freefn) {
 EXPORT void forge_onImGuiRender(void) {
     if (!igTreeNode_Str("Gathering Map###gather-map")) return;
     if (!g_hooked) igTextUnformatted("Hook failed: the mod is inactive (see log.txt).", NULL);
-    igCheckbox("Show gathering points on the map", &g_enabled);
-    igCheckbox("Also show other pickups (crates, barrels, ammo: the ! marker)", &g_show_other);
+    settings_read();
+    bool changed = igCheckbox("Show gathering points on the map", &g_enabled);
+    changed |= igCheckbox("Also show other pickups (crates, barrels, ammo: the ! marker)", &g_show_other);
     igSliderInt("Icon size (%)", &g_size, 20, 150, "%d", 0);
+    changed |= igIsItemDeactivatedAfterEdit();
+    if (changed) settings_write();
     static char line[48];
     const char *s = "Map: not on a quest";
     if (g_map >= 0) {

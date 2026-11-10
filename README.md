@@ -8,11 +8,11 @@
 
 A map mod for [MHGU Recomp](https://github.com/morerokk/MHGURecomp), the PC port of Monster Hunter Generations Ultimate.
 
-The quest map shows monsters, hunters and traps, but not where to gather. Gathering Map adds every gathering spot to the map, with the icon and color of the item it mostly gives: mining spots as ore, bone piles as bones, bug spots as bugs, plus herbs, mushrooms, honey, berries, webs, eggs, dung, whetstones, bait and wood. Icons sit under the game's own markers and only show for the areas the map is showing.
+The quest map shows monsters, hunters and traps, but not where to gather. Gathering Map adds every gathering spot to the map, with the icon and color of the item it mostly gives: mining spots as ore, bone piles as bones, bug spots as bugs, plus herbs, mushrooms, honey, berries, webs, eggs, dung, whetstones, bait and wood. Icons sit under the game's own markers and only show for the areas the map is showing. Like the map itself, they respect whether you brought a Map: without one, the full map only reveals the part around you, and the gathering points fade in and out with it as you move.
 
 ## Install
 
-1. Download `gather-map-v1.2.0.zip` from [Releases](https://github.com/lick-mee/mhgu-gathering-map/releases).
+1. Download `gather-map-v1.4.0.zip` from [Releases](https://github.com/lick-mee/mhgu-gathering-map/releases).
 2. Extract the `zzz-gather-map` folder into the `mods` folder of [MHGU Recomp](https://github.com/morerokk/MHGURecomp).
 3. Start the game.
 
@@ -24,6 +24,7 @@ Press **Insert** in game and open **Gathering Map**:
 
 - **Show gathering points on the map**: the mod itself.
 - **Also show other pickups**: off by default. Crates, barrels and arena ammo spots, with the game's `!` dropped-item marker.
+- **Without a Map item, only show points in the part of the map you can see**: on by default. Without a Map in your pouch the full map only shows the part around you, and the gathering points fade in and out with it (**Visible radius without a map** sets how far, 40 by default); with a Map (or a map skill) you see them all.
 - **Icon size (%)**: 35 by default.
 
 Options are saved as soon as you change them (in `gather_map.ini` in the game's save folder) and come back at the next start; until you change one, the defaults above apply.
@@ -39,7 +40,7 @@ Options are saved as soon as you change them (in `gather_map.ini` in the game's 
 
 When a quest loads, the game builds its gathering spots: some from the map's fixed point set (those with items for the quest's rank), the rest rolled at random from each area's candidates, each with an item lot. The plugin reads that live list, so the map shows exactly the quest's spots. A spot's icon is ore for mining and a bug for bug spots, else what its model looks like (bush, grass, mushroom, bone pile, hive, web), else the item its lot gives most, colored like that item from the game's own item table. `tools/make_data.py` turns the item table into `src/items.h`.
 
-The quest map draws its icons through one icon object per map view. Each keeps a GUI instance of the `map_icon` layout per icon and every frame converts a world position to the map and shows or hides it. The plugin hooks that object: when it initializes, the plugin makes extra instances of its own, and after each of its updates places them on the quest's spots in the areas that view shows, pointing each one's texture object at the item icon (the common icon texture, the icon's cut, the item color). `src/plugin.c` has the game addresses and offsets.
+The quest map draws its icons through one icon object per map view. Each keeps a GUI instance of the `map_icon` layout per icon and every frame converts a world position to the map and shows or hides it. The plugin hooks that object: when it initializes, the plugin makes extra instances of its own, and after each of its updates places them on the quest's spots in the areas that view shows, pointing each one's texture object at the item icon (the common icon texture, the icon's cut, the item color). Without a Map item (or a map skill), the full map only draws a soft spot of the map around the hunter: the game places a texture object at the hunter's map position and cuts it to the map square around him. The plugin reads the hunter's position from that cut and shows only the spots within the visible radius around it, fading them out towards the edge through the icon's alpha. `src/plugin.c` has the game addresses and offsets.
 
 ## Thanks
 

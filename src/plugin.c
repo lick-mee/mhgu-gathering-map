@@ -17,6 +17,11 @@
 //
 // cUIOQuestMapIcon: +0x24 its GUI, +0xCC the map view (cUIOMapBase: +0x94 map number; vtable +0x64 shows an area,
 // +0x6C world position -> map position), +0xD0/+0xD4 what new icon instances are made from and attached to.
+//
+// Without a map the whole map (cUIOWholeMap, its update at 0x61BAA0) shows only the part around the hunter: unless
+// the pouch holds a Map (item 1715) or the hunter has the skill effect 0xCE, it puts a texture object (instance +0x9C,
+// object +0xA4) at the hunter's map position - 64 and cuts it to the map's 128 x 128 square around him (the cut is
+// offset by 128, so the hunter is at cut x0 - 64, y0 - 64). The plugin then shows only the spots in that square.
 #include "forge.h"
 
 #ifndef PLUGIN_VERSION
@@ -67,6 +72,20 @@ typedef struct { u32 texture; float cut[4]; u32 icon; } IconCut;
 #define CLASS_MINING 2
 #define CLASS_BUG 3
 
+#define WHOLE_SHOWS_AREA 0x61BDA8 // cUIOWholeMap's vtable +0x64: tells the whole map from the area minimap
+#define WHOLE_FOG_INST 0x9C
+#define WHOLE_FOG_OBJ 0xA4
+#define TEXOBJ_RECT 0x10C
+#define FOG_HALF 64.0f   // half the cut: the hunter is at cut x0 - 64
+#define FADE_START 0.55f // points inside this part of the radius are fully shown
+#define GOT_POUCH 0x183A828   // the hunter's pouch
+#define POUCH_COUNT 0x19C21C  // (pouch, item) -> how many
+#define ITEM_MAP 1715
+#define GOT_SPLAYER 0x1838D80
+#define GET_MY_PLAYER 0x276278 // (sPlayer) -> the local hunter
+#define PLAYER_HAS 0x2864C4    // (hunter, skill effect) -> nonzero if active
+#define EFFECT_MAP 0xCE
+
 #define ANIM_ICN 4
 #define SEQ_DROPPED_ITEM 1000023 // em_otosimono
 #define PRIORITY 50              // below the game's icons (traps 100, monsters 700+, hunters 900)
@@ -87,12 +106,16 @@ typedef void (*WorldToMap)(u32 view, const float *pos, float *out, u32 area);
 typedef void (*SetTexture)(u32 obj, u32 texture);
 typedef void (*SetRect)(u32 obj, const float *rect);
 typedef void (*SetColor)(u32 obj, const u32 *rgba);
+typedef int (*PouchCount)(u32 pouch, u32 item);
+typedef u32 (*GetMyPlayer)(u32 splayer);
+typedef u32 (*PlayerHas)(u32 player, u32 effect);
 
 static ForgeHook g_init_hook, g_update_hook;
-static bool g_hooked, g_enabled = true, g_show_other = false;
+static bool g_hooked, g_enabled = true, g_show_other = false, g_follow_map = true;
 static u32 g_main;
 static int g_map = -1, g_shown;
 static int g_size = 35; // icon scale in percent
+static int g_radius = 40; // without a map: radius (map units) of the circle points show in
 
 // Settings: gather_map.ini in the game's save storage. Defaults until the first change; read once the storage
 // mounts (it can't before the game sets up its save), written on every change.
@@ -131,6 +154,8 @@ static void settings_parse(const char *s, const char *end) {
             #define KEY(name) (k == sizeof name - 1 && !memcmp(s, name, k))
             if (KEY("enabled")) g_enabled = v != 0;
             else if (KEY("show_other")) g_show_other = v != 0;
+            else if (KEY("follow_map")) g_follow_map = v != 0;
+            else if (KEY("radius") && v >= 10 && v <= 90) g_radius = v;
             else if (KEY("icon_size") && v >= 20 && v <= 150) g_size = v;
             #undef KEY
         }
@@ -179,6 +204,8 @@ static void settings_write(void) {
     make_path(path, sizeof path);
     q = put_line(q, "enabled", g_enabled);
     q = put_line(q, "show_other", g_show_other);
+    q = put_line(q, "follow_map", g_follow_map);
+    q = put_line(q, "radius", g_radius);
     q = put_line(q, "icon_size", g_size);
     u32 n = (u32)(q - buf);
     bool ok = false;
@@ -202,12 +229,35 @@ static u32 g_next_view;
 
 #define FN(type, off) ((type)(g_main + (off)))
 
-// The icon texture object of a GUI instance (as the game's 0x546F48 finds it).
-static u32 icon_object(u32 gui, u32 id) {
+// Object n of a GUI instance (as the game's 0x546F48 finds it).
+static u32 inst_object(u32 gui, u32 id, u32 n) {
     u32 split = *(u32 *)(gui + GUI_INST_SPLIT);
     u32 inst = id < split ? ((u32 *)*(u32 *)(gui + 0xF8))[id] : ((u32 *)*(u32 *)(gui + 0x294))[id - split];
     u32 objs = inst ? *(u32 *)(inst + INST_OBJECTS) : 0;
-    return objs ? ((u32 *)objs)[OBJ_ICON] : 0;
+    return objs ? ((u32 *)objs)[n] : 0;
+}
+
+static u32 icon_object(u32 gui, u32 id) { return inst_object(gui, id, OBJ_ICON); }
+
+// Whether the hunter sees the whole map: a Map in the pouch or the map skill effect (as cUIOWholeMap decides).
+static bool has_map(void) {
+    u32 *pouch = *(u32 **)(g_main + GOT_POUCH);
+    if (pouch && *pouch && FN(PouchCount, POUCH_COUNT)(*pouch, ITEM_MAP) > 0) return true;
+    u32 *splayer = *(u32 **)(g_main + GOT_SPLAYER);
+    u32 player = splayer && *splayer ? FN(GetMyPlayer, GET_MY_PLAYER)(*splayer) : 0;
+    return !player || FN(PlayerHas, PLAYER_HAS)(player, EFFECT_MAP) != 0;
+}
+
+// For the whole map without a map: the map position of the hunter, the middle of the part it shows.
+static bool fog_center(u32 view, float *x, float *y) {
+    u32 *vt = *(u32 **)view;
+    if (vt[VIEW_SHOWS_AREA] != g_main + WHOLE_SHOWS_AREA || has_map()) return false;
+    u32 obj = inst_object(*(u32 *)(view + ICON_GUI), *(u32 *)(view + WHOLE_FOG_INST), *(u32 *)(view + WHOLE_FOG_OBJ));
+    if (!obj) return false;
+    const float *cut = (const float *)(obj + TEXOBJ_RECT);
+    *x = cut[0] - FOG_HALF;
+    *y = cut[1] - FOG_HALF;
+    return true;
 }
 
 // The quest's gathering pops, or 0 if there are none.
@@ -278,6 +328,8 @@ static void icon_update(u32 obj) {
     if (g_enabled && view && pool) {
         u32 *vt = *(u32 **)view;
         g_map = (int)*(u32 *)(view + VIEW_MAP);
+        float fx = 0, fy = 0;
+        bool fog = g_follow_map && fog_center(view, &fx, &fy);
         for (u32 i = 0; i < POP_COUNT && used < count; i++) {
             u32 pop = pool + i * POP_SIZE;
             if (!(*(u8 *)(pop + POP_FLAGS) & 1) || *(u32 *)(pop + POP_ORIGIN) == ORIGIN_OTHER) continue;
@@ -288,6 +340,19 @@ static void icon_update(u32 obj) {
             const float *at = (const float *)(pop + POP_POS);
             float pos[4] __attribute__((aligned(16))) = {at[0], at[1], at[2], 0};
             float on_map[4] __attribute__((aligned(16))) = {0};
+            ((WorldToMap)vt[VIEW_WORLD_TO_MAP])(view, pos, on_map, area);
+            // Fades out towards the edge of the circle that shows the map: fully seen inside FADE_START of the radius.
+            u32 alpha = 255;
+            if (fog) {
+                float dx = on_map[0] - fx, dy = on_map[1] - fy, d2 = dx * dx + dy * dy;
+                float r = (float)g_radius, r0 = r * FADE_START;
+                if (d2 >= r * r) continue;
+                if (d2 > r0 * r0) {
+                    float t = (r * r - d2) / (r * r - r0 * r0);
+                    alpha = (u32)(t * t * 255.0f);
+                    if (alpha < 8) continue;
+                }
+            }
             u32 id = inst[used++];
             FN(SetLayer, UIO_SET_LAYER)(obj, id, 1, 2, 5);
             u32 tex = icon_object(gui, id);
@@ -296,9 +361,9 @@ static void icon_update(u32 obj) {
                 float cut[4] __attribute__((aligned(16))) = {k->cut[0], k->cut[1], k->cut[2], k->cut[3]};
                 FN(SetTexture, TEXOBJ_SET_TEXTURE)(tex, k->texture);
                 FN(SetRect, TEXOBJ_SET_RECT)(tex, cut);
-                FN(SetColor, TEXOBJ_SET_COLOR)(tex, &g_colors[color]);
+                u32 rgba = (g_colors[color] & 0x00FFFFFF) | alpha << 24;
+                FN(SetColor, TEXOBJ_SET_COLOR)(tex, &rgba);
             }
-            ((WorldToMap)vt[VIEW_WORLD_TO_MAP])(view, pos, on_map, area);
             FN(SetFloat, GUI_SET_X)(gui, id, on_map[0]);
             FN(SetFloat, GUI_SET_Y)(gui, id, on_map[1]);
             FN(SetInt, GUI_SET_PRIORITY)(gui, id, PRIORITY);
@@ -339,6 +404,9 @@ EXPORT void forge_onImGuiRender(void) {
     settings_read();
     bool changed = igCheckbox("Show gathering points on the map", &g_enabled);
     changed |= igCheckbox("Also show other pickups (crates, barrels, ammo: the ! marker)", &g_show_other);
+    changed |= igCheckbox("Without a Map item, only show points in the part of the map you can see", &g_follow_map);
+    igSliderInt("Visible radius without a map", &g_radius, 10, 90, "%d", 0);
+    changed |= igIsItemDeactivatedAfterEdit();
     igSliderInt("Icon size (%)", &g_size, 20, 150, "%d", 0);
     changed |= igIsItemDeactivatedAfterEdit();
     if (changed) settings_write();
